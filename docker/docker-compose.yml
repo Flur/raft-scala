@@ -1,0 +1,23 @@
+version: "3.9"
+services:
+  node0:
+    image: raft-scala:1.0<localBuild>
+    environment:
+      HOST: 8080
+      INTERFACE: "node0"
+      CLUSTER_LIST: "node1:8081"
+      HTTP_PORT: 9080
+    ports:
+      - "8080:8080"
+      - "9080:9080"
+
+  node1:
+    image: raft-scala:1.0<localBuild>
+    environment:
+      HOST: 8081
+      INTERFACE: "node1"
+      CLUSTER_LIST: "node0:8080"
+      HTTP_PORT: 9080
+    ports:
+      - "8081:8081"
+      - "9081:9080"

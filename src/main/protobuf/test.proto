@@ -1,0 +1,14 @@
+syntax="proto3";
+package ucu.distributedalgorithms;
+
+service TestService {
+  rpc test(TestRequest) returns (TestResponse) {}
+}
+
+message TestResponse {
+  string text = 1;
+}
+
+message TestRequest {
+  string something = 1;
+}
