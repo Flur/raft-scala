@@ -1,4 +1,6 @@
-package ucu.distributedalgorithms.util
+package ucu.distributedalgorithms
+
+import ucu.distributedalgorithms.raft.Raft.RaftState
 
 import scala.util.Try
 
@@ -25,10 +27,10 @@ package object util {
     Node(host, port)
   }
 
-  def readPortAndInterface(portSysEnvName: String, interfaceSysEnvName: String): Node = {
+  def readPortAndHost(portSysEnvName: String, hostSysEnvName: String): Node = {
     val port: Option[Int] = readSysEnv(portSysEnvName)
       .flatMap(stringToInt)
-    val host = readSysEnv(interfaceSysEnvName)
+    val host = readSysEnv(hostSysEnvName)
 
     (host, port) match {
       case (Some(host), Some(port)) => Node(host, port)
@@ -47,8 +49,24 @@ package object util {
   }
 
   def stringToList(regex: String = ",")(string: String): List[String] = {
-      string.split(regex)
-        .map(_.trim)
-        .toList
+    string.split(regex)
+      .map(_.trim)
+      .toList
+  }
+
+  def getLastLogIndex(state: RaftState): Int = {
+    state.log.length - 1
+  }
+
+  def getLastLogTerm(state: RaftState): Int = {
+    Try(state.log.last).toOption match {
+      case Some(logEntry) => logEntry.data
+      case None => 0
+    }
+  }
+
+  def calculateMajority(state: RaftState): Int = {
+    // + 1 add current node
+    ((state.log.length + 1) / 2.0).ceil.toInt
   }
 }

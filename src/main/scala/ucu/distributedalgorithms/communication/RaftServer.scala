@@ -1,10 +1,12 @@
-package ucu.distributedalgorithms
+package ucu.distributedalgorithms.communication
 
-import akka.actor.typed.{Behavior, PostStop, Signal}
-import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
+import akka.actor.typed.scaladsl.Behaviors
+import akka.actor.typed.{ActorSystem, Behavior, PostStop}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.Http.ServerBinding
 import akka.http.scaladsl.server.Directives
+import ucu.distributedalgorithms.Node
+import ucu.distributedalgorithms.raft.Raft
 
 import scala.concurrent.Future
 import scala.util.{Failure, Success}
@@ -19,10 +21,10 @@ object RaftServer {
   case object Stop extends Message
 
 
-  def apply(host: String, port: Int): Behavior[RaftServer.Message] = Behaviors.setup { context =>
-    implicit val system = context.system
+  def apply(host: String, port: Int, clusterNodes: List[Node], id: Int): Behavior[RaftServer.Message] = Behaviors.setup { context =>
+    implicit val system: ActorSystem[Nothing] = context.system
 
-    val raft = context.spawn(Raft(), "raft")
+    val raft = context.spawn(Raft(clusterNodes, id), "raft")
     val httpRoutes = new RaftServerHttpRoutes(raft)
     val grpcRoutes = new RaftServerGrpcRoutes(raft)
     val routes = Directives.concat(

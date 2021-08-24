@@ -1,4 +1,4 @@
-package ucu.distributedalgorithms
+package ucu.distributedalgorithms.communication
 
 import akka.actor.typed.{ActorRef, ActorSystem}
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport
@@ -7,6 +7,7 @@ import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.util.Timeout
 import spray.json._
+import ucu.distributedalgorithms.raft.Raft
 
 import scala.concurrent.Future
 import scala.concurrent.duration.DurationInt
@@ -17,7 +18,8 @@ trait JsonSupport extends SprayJsonSupport with DefaultJsonProtocol {
   implicit val messageFormat: RootJsonFormat[Message] = jsonFormat1(Message)
 }
 
-class RaftServerHttpRoutes(raft: ActorRef[Raft.Command])(implicit system: ActorSystem[_]) extends JsonSupport {
+class RaftServerHttpRoutes(raft: ActorRef[Raft.RaftCommand])(implicit system: ActorSystem[_]) extends JsonSupport {
+
   import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
 
   // asking someone requires a timeout and a scheduler, if the timeout hits without response
@@ -29,11 +31,18 @@ class RaftServerHttpRoutes(raft: ActorRef[Raft.Command])(implicit system: ActorS
       concat(
         post {
           entity(as[Message]) { message =>
+            system.log.info(s"Http server received message: $message")
+
             val operationPerformed: Future[Raft.ServerResponse] =
               raft.ask(Raft.AppendEntry(message.text, _))
+
             onSuccess(operationPerformed) {
-              case Raft.OK => complete("Message appended to the logs of the majority nodes in the cluster")
-              case Raft.KO(reason) => complete(StatusCodes.InternalServerError -> reason)
+              case Raft.OK =>
+                system.log.info("add meessage to major nodes")
+                complete("Message appended to the logs of the majority nodes in the cluster: %{}")
+              case Raft.KO(reason) =>
+                system.log.info("not added")
+                complete(StatusCodes.InternalServerError -> reason)
             }
           }
         },

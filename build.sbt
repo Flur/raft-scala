@@ -17,5 +17,12 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-stream" % AkkaVersion,
   "com.typesafe.akka" %% "akka-http" % AkkaHttpVersion,
   "com.typesafe.akka" %% "akka-http-spray-json" % AkkaHttpVersion,
+  // logging
   "ch.qos.logback" % "logback-classic" % "1.2.3",
+  // tests
+//  "org.scalactic" %% "scalactic" % "3.2.9",
+//  "org.scalatest" %% "scalatest" % "3.2.9" % "test",
+
+  "org.scalatest" %% "scalatest" % "3.1.4" % Test,
+  "com.typesafe.akka" %% "akka-actor-testkit-typed" % AkkaVersion % Test
 )
