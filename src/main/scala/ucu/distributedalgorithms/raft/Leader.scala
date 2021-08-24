@@ -1,7 +1,7 @@
 package ucu.distributedalgorithms.raft
 
 
-import akka.actor.typed.Behavior
+import akka.actor.typed.{Behavior, PostStop}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
 import ucu.distributedalgorithms.{AppendEntriesResponse, Node}
 import ucu.distributedalgorithms.raft.Raft._
@@ -36,7 +36,7 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
 
     timers.startSingleTimer(Leader.LeaderTimeoutKey, LeaderTimeout, duration)
 
-    Behaviors.receiveMessage {
+    Behaviors.receiveMessage[RaftCommand] {
       case request@RaftAppendEntriesRequest(term, leaderId, _, _, _, _, replyTo) => request match {
         case request if term > state.currentTerm =>
           replyTo ! RaftAppendEntriesResponse(term, success = false)
@@ -55,29 +55,38 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
           Behaviors.same
       }
 
-      case request@RaftRequestVoteRequest(term, candidateId, _, _, replyTo) => request match {
-        case request if term > state.currentTerm =>
-          replyTo ! RaftAppendEntriesResponse(term, success = true)
+      case request@RaftRequestVoteRequest(term, candidateId, _, _, replyTo) =>
+        context.log.info("Leader received Request Vote")
 
-          Follower(
-            cluster,
-            state.copy(
-              currentTerm = term,
-              votedFor = candidateId,
+        request match {
+          case request if term > state.currentTerm =>
+            replyTo ! RaftAppendEntriesResponse(term, success = true)
+
+            Follower(
+              cluster,
+              state.copy(
+                currentTerm = term,
+                votedFor = candidateId,
+              )
             )
-          )
-      }
+        }
 
       case RaftAppendEntriesResponse(term, success) =>
-
         context.log.info("Received append entries response")
 
         Behaviors.same
 
       case LeaderTimeout =>
+        context.log.info("Leader timeout")
+
         context.stop(appendEntryManager)
 
         leader(state)
+    }.receiveSignal {
+      case (context, postStop: PostStop) =>
+        context.log.info("Leader behaviour terminated on post stop")
+
+        Behaviors.same
     }
   }
 }

@@ -1,7 +1,7 @@
 package ucu.distributedalgorithms.raft
 
 import akka.actor.typed.scaladsl.{Behaviors, TimerScheduler}
-import akka.actor.typed.{ActorRef, Behavior}
+import akka.actor.typed.{ActorRef, Behavior, PostStop}
 import ucu.distributedalgorithms.raft.Raft.{RaftCommand, RaftState}
 import ucu.distributedalgorithms.{LogEntry, Node}
 
@@ -82,12 +82,22 @@ class Raft private(
 
   import Raft._
 
-  timers.startSingleTimer(RaftTimeoutKey, InitTimeout, 5.seconds)
+//  timers.startSingleTimer(RaftTimeoutKey, InitTimeout, 5.seconds)
 
-  private def raft(): Behavior[RaftCommand] = Behaviors.receiveMessage {
-    case InitTimeout =>
-      timers.cancel(RaftTimeoutKey)
-
-      Follower(cluster, state)
+  private def raft(): Behavior[RaftCommand] = {
+    Follower(cluster, state)
   }
+//    Behaviors.receiveMessage[RaftCommand] {
+//    case InitTimeout =>
+//      timers.cancel(RaftTimeoutKey)
+//
+//      Follower(cluster, state)
+//    case _ =>
+//      Behaviors.same
+//  }.receiveSignal {
+//    case (context, postStop: PostStop) =>
+//      context.log.info("Raft behaviour terminated on post stop")
+//
+//      Behaviors.same
+//  }
 }

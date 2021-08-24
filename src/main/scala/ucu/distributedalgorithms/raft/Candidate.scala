@@ -1,7 +1,7 @@
 package ucu.distributedalgorithms.raft
 
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
-import akka.actor.typed.{ActorRef, Behavior}
+import akka.actor.typed.{ActorRef, Behavior, PostStop}
 import ucu.distributedalgorithms.raft.Raft._
 import ucu.distributedalgorithms.util.calculateMajority
 import ucu.distributedalgorithms.{Node, RequestVoteResponse}
@@ -38,7 +38,7 @@ class Candidate private(
     val requestVotesManager = context.spawnAnonymous[Nothing](
       RequestVotesManager(cluster, state, requestVoteResponseAdapter))
 
-    Behaviors.receiveMessage {
+    Behaviors.receiveMessage[RaftCommand] {
       case request@RaftAppendEntriesRequest(term, leaderId, _, _, _, _, replyTo) => request match {
         case request if term > state.currentTerm =>
           candidateCleanup(requestVotesManager)
@@ -65,22 +65,25 @@ class Candidate private(
           Behaviors.same
       }
 
-      case request@RaftRequestVoteRequest(term, candidateId, _, _, replyTo) => request match {
-        case request if term > state.currentTerm =>
-          candidateCleanup(requestVotesManager)
+      case request@RaftRequestVoteRequest(term, candidateId, _, _, replyTo) =>
+        context.log.info("Candidate received Request Vote")
 
-          replyTo ! RaftRequestVoteResponse(term, voteGranted = true)
+        request match {
+          case request if term > state.currentTerm =>
+            candidateCleanup(requestVotesManager)
 
-          Follower(
-            cluster,
-            state.copy(currentTerm = term, votedFor = candidateId)
-          )
+            replyTo ! RaftRequestVoteResponse(term, voteGranted = true)
 
-        case _ =>
-          replyTo ! RaftRequestVoteResponse(state.currentTerm, voteGranted = false)
+            Follower(
+              cluster,
+              state.copy(currentTerm = term, votedFor = candidateId)
+            )
 
-          Behaviors.same
-      }
+          case _ =>
+            replyTo ! RaftRequestVoteResponse(state.currentTerm, voteGranted = false)
+
+            Behaviors.same
+        }
 
       case response@RaftRequestVoteResponse(term, voteGranted) => response match {
         case response if state.currentTerm == term && voteGranted =>
@@ -89,7 +92,7 @@ class Candidate private(
           if (newVotes >= calculateMajority(state)) {
             candidateCleanup(requestVotesManager)
 
-             Leader(cluster, state.copy(leaderId = state.id))
+            Leader(cluster, state.copy(leaderId = state.id))
           } else {
             candidateCleanup(requestVotesManager)
 
@@ -114,6 +117,11 @@ class Candidate private(
 
         startSingleTimer()
         candidate(1, newState)
+    }.receiveSignal {
+      case (context, postStop: PostStop) =>
+        context.log.info("Candidate behaviour terminated on post stop")
+
+        Behaviors.same
     }
   }
 

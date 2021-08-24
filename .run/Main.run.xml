@@ -1,0 +1,21 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Main" type="Application" factoryName="Application">
+    <envs>
+      <env name="PORT" value="8081" />
+      <env name="HOST" value="0.0.0.0" />
+      <env name="ID" value="1" />
+      <env name="CLUSTER_LIST" value="0.0.0.0:8082,0.0.0.0:8083" />
+    </envs>
+    <option name="MAIN_CLASS_NAME" value="ucu.distributedalgorithms.Main" />
+    <module name="raft-scala" />
+    <extension name="coverage">
+      <pattern>
+        <option name="PATTERN" value="ucu.distributedalgorithms.*" />
+        <option name="ENABLED" value="true" />
+      </pattern>
+    </extension>
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

@@ -1,9 +1,10 @@
 package ucu.distributedalgorithms.raft
 
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
-import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
+import akka.actor.typed.{ActorRef, ActorSystem, Behavior, PostStop}
 import akka.grpc.GrpcClientSettings
 import ucu.distributedalgorithms._
+import ucu.distributedalgorithms.raft.AppendEntries.AppendEntriesCommand
 import ucu.distributedalgorithms.raft.Raft.RaftState
 import ucu.distributedalgorithms.util.{getLastLogIndex, getLastLogTerm}
 
@@ -32,9 +33,15 @@ class RequestVote private(
 
   import RequestVote._
 
+  implicit val system: ActorSystem[Nothing] = context.system
+  implicit val ec: ExecutionContextExecutor = system.executionContext
+
+  val clientSettings = GrpcClientSettings.connectToServiceAt(node.host, node.port).withTls(false)
+  val client: RaftCommunicationServiceClient = RaftCommunicationServiceClient(clientSettings)
+
   makeVoteRequest()
 
-  private def requestVote(): Behavior[RequestVoteCommand] = Behaviors.receiveMessage {
+  private def requestVote(): Behavior[RequestVoteCommand] = Behaviors.receiveMessage[RequestVoteCommand] {
     case RequestVoteSuccess(r) =>
       candidate ! r
 
@@ -44,16 +51,15 @@ class RequestVote private(
       makeVoteRequest()
 
       Behaviors.same
+  }.receiveSignal {
+    case (context: ActorContext[RequestVoteCommand], postStop: PostStop) =>
+      // todo could be one client for whole app, it's concurrent
+      client.close()
+
+      Behaviors.same
   }
 
   private def makeVoteRequest(): Unit = {
-    implicit val system: ActorSystem[Nothing] = context.system
-    implicit val ec: ExecutionContextExecutor = system.executionContext
-
-    val clientSettings = GrpcClientSettings.connectToServiceAt(node.host, node.port).withTls(false)
-
-    val client: RaftCommunicationService = RaftCommunicationServiceClient(clientSettings)
-
     val reply: Future[RequestVoteResponse] = client.requestVote(
       RequestVoteRequest(state.currentTerm, state.id, getLastLogIndex(state), getLastLogTerm(state))
     )

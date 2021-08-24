@@ -1,7 +1,7 @@
 package ucu.distributedalgorithms.raft
 
 
-import akka.actor.typed.Behavior
+import akka.actor.typed.{Behavior, PostStop}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
 import ucu.distributedalgorithms.Node
 import ucu.distributedalgorithms.raft.Raft._
@@ -32,7 +32,7 @@ class Follower private(
 
     timers.startSingleTimer(Follower.FollowerTimerKey, FollowerTimeout, duration)
 
-    Behaviors.receiveMessage {
+    Behaviors.receiveMessage[RaftCommand] {
       case request@RaftAppendEntriesRequest(term, leaderId, _, _, _, _, replyTo) => request match {
         case request if term > state.currentTerm =>
           val newState = state.copy(currentTerm = term, votedFor = 0, leaderId = leaderId)
@@ -47,23 +47,26 @@ class Follower private(
           follower(state)
       }
 
-      case request@RaftRequestVoteRequest(term, candidateId, _, _, replyTo) => request match {
-        case request if term < state.currentTerm =>
-          replyTo ! RaftRequestVoteResponse(state.currentTerm, voteGranted = false)
+      case request@RaftRequestVoteRequest(term, candidateId, _, _, replyTo) =>
+        context.log.info("Follower received Request Vote")
 
-          follower(state)
+        request match {
+          case request if term < state.currentTerm =>
+            replyTo ! RaftRequestVoteResponse(state.currentTerm, voteGranted = false)
 
-        case request if term > state.currentTerm ||
-          (term == state.currentTerm && (state.votedFor == 0 || state.votedFor == candidateId)) =>
-          replyTo ! RaftRequestVoteResponse(term, voteGranted = true)
+            follower(state)
 
-          follower(state.copy(votedFor = candidateId, currentTerm = term))
+          case request if term > state.currentTerm ||
+            (term == state.currentTerm && (state.votedFor == 0 || state.votedFor == candidateId)) =>
+            replyTo ! RaftRequestVoteResponse(term, voteGranted = true)
 
-        case _ =>
-          replyTo ! RaftRequestVoteResponse(state.currentTerm, voteGranted = false)
+            follower(state.copy(votedFor = candidateId, currentTerm = term))
 
-          follower(state)
-      }
+          case _ =>
+            replyTo ! RaftRequestVoteResponse(state.currentTerm, voteGranted = false)
+
+            follower(state)
+        }
 
       case FollowerTimeout =>
         timers.cancel(FollowerTimeout)
@@ -71,6 +74,11 @@ class Follower private(
         context.log.info("Election timeout, switch to candidate")
 
         Candidate(cluster, state)
+    }.receiveSignal {
+      case (context, postStop: PostStop) =>
+        context.log.info("Follower behaviour terminated on post stop")
+
+        Behaviors.same
     }
   }
 }
