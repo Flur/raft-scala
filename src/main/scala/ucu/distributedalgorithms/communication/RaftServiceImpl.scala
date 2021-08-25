@@ -45,7 +45,7 @@ class RaftServiceImpl(raft: ActorRef[RaftCommand])(implicit system: ActorSystem[
       raft.ask(RaftAppendEntriesRequest(in.term, in.leaderId, in.prevLogIndex, in.prevLogTerm, in.entries, in.leaderCommit, _))
 
     operationPerformed.collect {
-      case RaftAppendEntriesResponse(t, s) =>
+      case RaftAppendEntriesResponse(t, s, 0) =>
         system.log.info("Raft gRPC Service Responded with AppendEntriesResponse term:{} success:{}", t, s)
 
         AppendEntriesResponse(t, s)

@@ -1,6 +1,6 @@
 package ucu.distributedalgorithms
 
-import ucu.distributedalgorithms.raft.Raft.RaftState
+import ucu.distributedalgorithms.raft.Raft.{RaftAppendEntriesRequest, RaftState}
 
 import scala.util.Try
 
@@ -60,7 +60,7 @@ package object util {
 
   def getLastLogTerm(state: RaftState): Int = {
     Try(state.log.last).toOption match {
-      case Some(logEntry) => logEntry.data
+      case Some(logEntry) => logEntry.term
       case None => 0
     }
   }
@@ -68,5 +68,59 @@ package object util {
   def calculateMajority(state: RaftState): Int = {
     // + 1 add current node
     ((state.log.length + 1) / 2.0).ceil.toInt
+  }
+
+  def leaderIDToLocation(leaderId: Int): String = {
+    // todo move to env variables
+    val leaderIdToLocation: Map[Int, String] = Map(
+      (1 -> "node1:8081"),
+      (2 -> "node2:8082"),
+      (3 -> "node3:8083"),
+      (4 -> "node4:8084"),
+      (5 -> "node5:8085")
+    )
+
+    leaderIdToLocation.getOrElse(leaderId, "")
+  }
+
+  def isLogOkOnAppendEntry(state: RaftState, appendEntriesRequest: RaftAppendEntriesRequest): Boolean = {
+    var currentPrevLogIndex = state.log.length - 1
+
+    if (currentPrevLogIndex < 0) {
+      currentPrevLogIndex = 0
+    }
+
+    val currentPrevLogTerm = state.log.lift(currentPrevLogIndex).getOrElse(0)
+
+    val leaderLogIsEmpty = appendEntriesRequest.prevLogIndex == 0 && appendEntriesRequest.prevLogTerm == 0
+
+    currentPrevLogIndex >= appendEntriesRequest.prevLogIndex && (leaderLogIsEmpty || currentPrevLogTerm == appendEntriesRequest.prevLogTerm)
+  }
+
+  def appendEntries(state: RaftState, entries: Seq[LogEntry], prevLogIndex: Int, leaderCommit: Int): RaftState = {
+    var newState = state.copy()
+
+    if (entries.nonEmpty && (newState.log.length > (prevLogIndex + 1))) {
+      // could be check for same term , newState.log.lift(prevLogIndex + 1) != entries.lift(0)
+      var log = newState.log.toList
+
+      newState = newState.copy(
+        log = log.slice(0, prevLogIndex)
+      )
+    }
+
+    if ((prevLogIndex + 1 + entries.length) > newState.log.length) {
+      newState = newState.copy(
+        log = newState.log.concat(entries)
+      )
+    }
+
+    if (leaderCommit > newState.commitIndex) {
+      newState = newState.copy(
+        commitIndex = leaderCommit
+      )
+    }
+
+    newState
   }
 }

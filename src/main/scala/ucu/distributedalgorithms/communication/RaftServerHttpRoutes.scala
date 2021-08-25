@@ -37,18 +37,23 @@ class RaftServerHttpRoutes(raft: ActorRef[Raft.RaftCommand])(implicit system: Ac
               raft.ask(Raft.AppendEntry(message.text, _))
 
             onSuccess(operationPerformed) {
-              case Raft.OK =>
-                system.log.info("add meessage to major nodes")
-                complete("Message appended to the logs of the majority nodes in the cluster: %{}")
+              case Raft.OK(data) =>
+                complete("Message appended to the logs of the majority nodes in the cluster")
               case Raft.KO(reason) =>
-                system.log.info("not added")
                 complete(StatusCodes.InternalServerError -> reason)
             }
           }
         },
         get {
-          // todo when we want to get list of messages we check if it leader if not sends leader id
-          complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Todo, do we need get method?</h1>"))
+          val operationPerformed: Future[Raft.ServerResponse] =
+            raft.ask(Raft.GetLog(_))
+
+          onSuccess(operationPerformed) {
+            case Raft.OK(data) =>
+              complete(data.getOrElse(List.empty).mkString(", "))
+            case Raft.KO(reason) =>
+              complete(StatusCodes.InternalServerError -> reason)
+          }
         }
       )
     }

@@ -4,7 +4,7 @@ import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
 import akka.actor.typed.{ActorRef, ActorSystem, Behavior, PostStop}
 import akka.grpc.GrpcClientSettings
 import ucu.distributedalgorithms._
-import ucu.distributedalgorithms.raft.AppendEntries.AppendEntriesCommand
+import ucu.distributedalgorithms.raft.AppendEntries.{AppendEntriesCommand, AppendEntriesSuccess}
 import ucu.distributedalgorithms.raft.Raft.RaftState
 
 import scala.concurrent.duration.DurationInt
@@ -16,24 +16,27 @@ object AppendEntries {
 
   sealed trait AppendEntriesCommand
 
-  final case class AppendEntriesSuccess(response: AppendEntriesResponse) extends AppendEntriesCommand
+  final case class AppendEntriesSuccess(response: AppendEntriesResponse, followerIndexInCluster: Int) extends AppendEntriesCommand
 
   final case class AppendEntriesFailure() extends AppendEntriesCommand
 
   final case object MakeVoteRequest extends AppendEntriesCommand
+
   final case object AppendEntriesRetryKey extends AppendEntriesCommand
 
-  def apply(node: Node, leader: ActorRef[AppendEntriesResponse], state: RaftState): Behavior[AppendEntriesCommand] =
+  def apply(node: Node, leader: ActorRef[AppendEntriesSuccess], state: RaftState, nextIndex: Int, followerIndexInCluster: Int): Behavior[AppendEntriesCommand] =
     Behaviors.withTimers { timers =>
-      Behaviors.setup { context => new AppendEntries(node, state, context, leader, timers).appendEntries() }
+      Behaviors.setup { context => new AppendEntries(nextIndex, followerIndexInCluster, node, state, context, leader, timers).appendEntries() }
     }
 }
 
 class AppendEntries private(
+                             nextIndex: Int,
+                             followerIndexInCluster: Int,
                              node: Node,
                              state: RaftState,
                              context: ActorContext[AppendEntriesCommand],
-                             leader: ActorRef[AppendEntriesResponse],
+                             leader: ActorRef[AppendEntriesSuccess],
                              timers: TimerScheduler[AppendEntriesCommand]
                            ) {
 
@@ -45,10 +48,10 @@ class AppendEntries private(
   val clientSettings = GrpcClientSettings.connectToServiceAt(node.host, node.port).withTls(false)
   val client: RaftCommunicationServiceClient = RaftCommunicationServiceClient(clientSettings)
 
-  makeVoteRequest()
+  appendEntriesRequest()
 
   private def appendEntries(): Behavior[AppendEntriesCommand] = Behaviors.receiveMessage[AppendEntriesCommand] {
-    case AppendEntriesSuccess(r) =>
+    case r@AppendEntriesSuccess(_, _) =>
       leader ! r
 
       timers.cancel(AppendEntriesRetryKey)
@@ -56,7 +59,7 @@ class AppendEntries private(
       Behaviors.stopped
 
     case AppendEntriesFailure() =>
-      timers.startSingleTimer(AppendEntriesRetryKey, MakeVoteRequest, 90.milliseconds)
+      timers.startSingleTimer(AppendEntriesRetryKey, MakeVoteRequest, 1500.milliseconds)
 
       context.log.info("Send retry append entries to node {}-{} and term {}", node.host, node.port, state.currentTerm)
 
@@ -65,7 +68,7 @@ class AppendEntries private(
     case MakeVoteRequest =>
       timers.cancel(AppendEntriesRetryKey)
 
-      makeVoteRequest()
+      appendEntriesRequest()
 
       Behaviors.same
 
@@ -79,16 +82,26 @@ class AppendEntries private(
       Behaviors.same
   }
 
-  private def makeVoteRequest(): Unit = {
+  private def appendEntriesRequest(): Unit = {
     context.log.info("Sent append entries to node {}-{} and term {}", node.host, node.port, state.currentTerm)
 
+    val logEntries = state.log.slice(nextIndex, state.log.length - 1)
+    var prevLogTerm = 0
+    var prevLogIndex = nextIndex - 1
+
+    if (prevLogIndex > 0) {
+      prevLogTerm = state.log(nextIndex).term
+    } else {
+      prevLogIndex = 0
+    }
+
     val reply: Future[AppendEntriesResponse] = client.appendEntries(
-      AppendEntriesRequest(state.currentTerm, state.id, 0, 0, Seq.empty[LogEntry])
+      AppendEntriesRequest(state.currentTerm, state.id, prevLogIndex, prevLogTerm, logEntries)
     )
 
     context.pipeToSelf(reply) {
       case Success(msg: AppendEntriesResponse) =>
-        AppendEntriesSuccess(msg)
+        AppendEntriesSuccess(msg, followerIndexInCluster)
 
       case Failure(_) => AppendEntriesFailure()
     }

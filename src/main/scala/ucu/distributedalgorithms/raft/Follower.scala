@@ -3,8 +3,9 @@ package ucu.distributedalgorithms.raft
 
 import akka.actor.typed.{Behavior, PostStop}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
-import ucu.distributedalgorithms.Node
+import ucu.distributedalgorithms.{LogEntry, Node}
 import ucu.distributedalgorithms.raft.Raft._
+import ucu.distributedalgorithms.util.{appendEntries, isLogOkOnAppendEntry, leaderIDToLocation}
 
 import scala.concurrent.duration.DurationInt
 import scala.util.Random
@@ -28,24 +29,49 @@ class Follower private(
                       ) {
   private def follower(state: RaftState): Behavior[RaftCommand] = {
     // todo timeout 100 - 500 m
-    val duration = Random.between(1000, 5000).milliseconds
+    val duration = Random.between(4000, 8000).milliseconds
 
     timers.startSingleTimer(Follower.FollowerTimerKey, FollowerTimeout, duration)
 
     Behaviors.receiveMessage[RaftCommand] {
-      case request@RaftAppendEntriesRequest(term, leaderId, _, _, _, _, replyTo) => request match {
-        case request if term > state.currentTerm =>
-          val newState = state.copy(currentTerm = term, votedFor = 0, leaderId = leaderId)
+      case GetLog(replyTo) =>
+        replyTo ! OK(Some(state.log))
 
-          replyTo ! RaftAppendEntriesResponse(newState.currentTerm, success = false)
+        Behaviors.same
+
+      case AppendEntry(message, replyTo) =>
+        if (state.leaderId != 0) {
+          val leader = leaderIDToLocation(state.leaderId)
+
+          replyTo ! KO(s"Node is not leader, leader is $leader")
+        } else {
+          replyTo ! KO(s"Node is not leader, no leader is elected")
+        }
+
+        Behaviors.same
+
+      case request@RaftAppendEntriesRequest(term, leaderId, prevLogIndex, prevLogTerm, entries, leaderCommit, replyTo) =>
+        var newState = state.copy()
+
+        if (term > state.currentTerm) {
+          newState = newState.copy(
+            currentTerm = term,
+            votedFor = 0,
+            leaderId = leaderId
+          )
+        }
+
+        val logOk = isLogOkOnAppendEntry(newState, request)
+
+        if (term == newState.currentTerm && logOk) {
+          replyTo ! RaftAppendEntriesResponse(newState.currentTerm, success = true, 0)
+
+          follower(appendEntries(newState, entries, prevLogIndex, leaderCommit))
+        } else {
+          replyTo ! RaftAppendEntriesResponse(newState.currentTerm, success = false, 0)
 
           follower(newState)
-
-        case _ =>
-          replyTo ! RaftAppendEntriesResponse(state.currentTerm, success = false)
-
-          follower(state)
-      }
+        }
 
       case request@RaftRequestVoteRequest(term, candidateId, _, _, replyTo) =>
         context.log.info("Follower received Request Vote")

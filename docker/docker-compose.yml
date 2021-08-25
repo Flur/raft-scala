@@ -6,7 +6,7 @@ services:
       PORT: 8080
       HOST: "node1"
       CLUSTER_LIST: "node2:8080,node3:8080"
-      ID: 1
+      ID: "node1:8081"
     ports:
       - "8081:8080"
 
@@ -16,16 +16,16 @@ services:
       PORT: 8080
       HOST: "node2"
       CLUSTER_LIST: "node1:8080,node3:8080"
-      ID: 2
+      ID: "node2:8082"
     ports:
       - "8082:8080"
 
-#  node3:
-#    image: raft-scala:1.0<localBuild>
-#    environment:
-#      PORT: 8080
-#      HOST: "node3"
-#      CLUSTER_LIST: "node1:8080,node2:8080"
-#      ID: 3
-#    ports:
-#      - "8083:8080"
+  node3:
+    image: raft-scala:1.0<localBuild>
+    environment:
+      PORT: 8080
+      HOST: "node3"
+      CLUSTER_LIST: "node1:8080,node2:8080"
+      ID: "node3:8083"
+    ports:
+      - "8083:8080"

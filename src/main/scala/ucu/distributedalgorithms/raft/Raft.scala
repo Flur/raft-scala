@@ -11,11 +11,13 @@ object Raft {
 
   sealed trait ServerResponse
 
-  final case object OK extends ServerResponse
+  final case class OK(data: Option[List[LogEntry]]) extends ServerResponse
 
   final case class KO(reason: String) extends ServerResponse
 
-  final case class AppendEntry(text: String, replyTo: ActorRef[ServerResponse]) extends RaftCommand
+  final case class AppendEntry(message: String, replyTo: ActorRef[ServerResponse]) extends RaftCommand
+
+  final case class GetLog(replyTo: ActorRef[ServerResponse]) extends RaftCommand
 
   final case class RaftState(
                               id: Int = 0,
@@ -29,8 +31,14 @@ object Raft {
                               lastApplied: Int = 0
                             )
 
-  sealed trait RaftCommand
+  final case class VolatileLeaderState(
+                                        nextIndex: List[Int],
+                                        matchIndex: List[Int],
+                                        leaderNextIndex: Int,
+                                        leaderMatchIndex: Int,
+                                      )
 
+  sealed trait RaftCommand
 
   final case class RaftAppendEntriesRequest(
                                              term: Int,
@@ -42,7 +50,7 @@ object Raft {
                                              replyTo: ActorRef[RaftCommand]
                                            ) extends RaftCommand
 
-  final case class RaftAppendEntriesResponse(term: Int, success: Boolean) extends RaftCommand
+  final case class RaftAppendEntriesResponse(term: Int, success: Boolean, followerIndexInCluster: Int = 0) extends RaftCommand
 
   final case class RaftRequestVoteRequest(
                                            term: Int,
@@ -82,22 +90,22 @@ class Raft private(
 
   import Raft._
 
-//  timers.startSingleTimer(RaftTimeoutKey, InitTimeout, 5.seconds)
+  //  timers.startSingleTimer(RaftTimeoutKey, InitTimeout, 5.seconds)
 
   private def raft(): Behavior[RaftCommand] = {
     Follower(cluster, state)
   }
-//    Behaviors.receiveMessage[RaftCommand] {
-//    case InitTimeout =>
-//      timers.cancel(RaftTimeoutKey)
-//
-//      Follower(cluster, state)
-//    case _ =>
-//      Behaviors.same
-//  }.receiveSignal {
-//    case (context, postStop: PostStop) =>
-//      context.log.info("Raft behaviour terminated on post stop")
-//
-//      Behaviors.same
-//  }
+  //    Behaviors.receiveMessage[RaftCommand] {
+  //    case InitTimeout =>
+  //      timers.cancel(RaftTimeoutKey)
+  //
+  //      Follower(cluster, state)
+  //    case _ =>
+  //      Behaviors.same
+  //  }.receiveSignal {
+  //    case (context, postStop: PostStop) =>
+  //      context.log.info("Raft behaviour terminated on post stop")
+  //
+  //      Behaviors.same
+  //  }
 }
