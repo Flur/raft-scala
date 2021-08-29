@@ -58,9 +58,9 @@ class AppendEntries private(
       Behaviors.same
 
     case AppendEntriesFailure() =>
-//      timers.startSingleTimer(AppendEntriesRetryKey, MakeAppendEntriesRequest, 1500.milliseconds)
+      timers.startSingleTimer(AppendEntriesRetryKey, MakeAppendEntriesRequest, 1500.milliseconds)
 
-//      context.log.info("Send retry append entries to node {}-{} and term {}", node.host, node.port, state.currentTerm)
+      context.log.info("Send retry append entries to node {}-{} and term {}", node.host, node.port, state.currentTerm)
 
       Behaviors.same
 
