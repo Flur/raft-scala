@@ -44,17 +44,17 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
     val appendEntriesManagerActor: ActorRef[Nothing] = appendEntriesManager match {
       case Some(actor) => actor
       case None =>
-        val duration = Random.between(2500, 3000).milliseconds
+        val duration = Random.between(7000, 8000).milliseconds
 
         timers.startSingleTimer(Leader.LeaderTimeoutKey, LeaderTimeout, duration)
 
-        context.spawnAnonymous[Nothing](AppendEntriesManager(cluster, state, leaderState, appendEntriesResponseAdapter)
-        )
+        context.spawnAnonymous[Nothing](AppendEntriesManager(cluster, state, leaderState, appendEntriesResponseAdapter))
     }
 
     replyToOnAppendEntry match {
       case Some(replyTo) if replyTo._2 >= state.commitIndex  =>
         replyTo._1 ! OK(None)
+      case None => None
     }
 
     Behaviors.receiveMessage[RaftCommand] {
@@ -116,8 +116,6 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
         )
 
       case RaftAppendEntriesResponse(term, success, nodeIdOpt) =>
-        context.log.info("Received append entries response")
-
         val nodeId: Int = nodeIdOpt.getOrElse(0)
         var newState = state.copy()
         var newLeaderState = leaderState.copy()
@@ -138,10 +136,7 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
             )
           }
 
-          timers.cancel(LeaderTimeout)
-          context.stop(appendEntriesManagerActor)
-
-          leader(state, newLeaderState)
+          leader(state, newLeaderState, Some(appendEntriesManagerActor))
         } else if (term > newState.currentTerm) {
           context.stop(appendEntriesManagerActor)
           timers.cancel(LeaderTimeout)
@@ -161,6 +156,8 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
         context.stop(appendEntriesManagerActor)
 
         leader(state, leaderState)
+
+      case _ => Behaviors.same
     }.receiveSignal {
       case (context, postStop: PostStop) =>
         timers.cancel(LeaderTimeout)

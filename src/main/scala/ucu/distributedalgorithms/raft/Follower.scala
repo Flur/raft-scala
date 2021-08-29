@@ -16,7 +16,6 @@ object Follower {
   def apply(cluster: List[Node], state: RaftState): Behavior[RaftCommand] = Behaviors.withTimers { timers =>
     Behaviors.setup { context =>
       context.log.info("Init Follower with term {}", state.currentTerm)
-      context.log.info("Init Follower with term {}", state.leaderId)
 
       new Follower(context, timers, cluster).follower(state)
     }
@@ -30,7 +29,7 @@ class Follower private(
                       ) {
   private def follower(state: RaftState): Behavior[RaftCommand] = {
     // todo timeout 100 - 500 m
-    val duration = Random.between(4000, 8000).milliseconds
+    val duration = Random.between(8000, 10000).milliseconds
 
     timers.startSingleTimer(Follower.FollowerTimerKey, FollowerTimeout, duration)
 
@@ -84,6 +83,8 @@ class Follower private(
         context.log.info("Election timeout, switch to candidate")
 
         Candidate(cluster, state)
+
+      case _ => Behaviors.same
 
     }.receiveSignal {
       case (context, postStop: PostStop) =>

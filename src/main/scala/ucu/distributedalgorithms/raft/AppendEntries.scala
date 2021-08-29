@@ -58,9 +58,9 @@ class AppendEntries private(
       Behaviors.same
 
     case AppendEntriesFailure() =>
-      timers.startSingleTimer(AppendEntriesRetryKey, MakeAppendEntriesRequest, 1500.milliseconds)
+//      timers.startSingleTimer(AppendEntriesRetryKey, MakeAppendEntriesRequest, 1500.milliseconds)
 
-      context.log.info("Send retry append entries to node {}-{} and term {}", node.host, node.port, state.currentTerm)
+//      context.log.info("Send retry append entries to node {}-{} and term {}", node.host, node.port, state.currentTerm)
 
       Behaviors.same
 
@@ -92,8 +92,8 @@ class AppendEntries private(
     }
 
     context.log.info(
-      "Sent append entries to node {}-{} and term {} with entries",
-      node.host, node.port, state.currentTerm, logEntries
+      "Sent append entries to node {}-{} term {} nextIndex {} prevLogTerm {} logEntries {}",
+      node.host, node.port, state.currentTerm, nextIndex, prevLogTerm, logEntries
     )
 
     val reply: Future[AppendEntriesResponse] = client.appendEntries(

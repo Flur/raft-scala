@@ -4,7 +4,6 @@ import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
 import akka.actor.typed.{ActorRef, ActorSystem, Behavior, PostStop}
 import akka.grpc.GrpcClientSettings
 import ucu.distributedalgorithms._
-import ucu.distributedalgorithms.raft.AppendEntries.AppendEntriesCommand
 import ucu.distributedalgorithms.raft.Raft.RaftState
 import ucu.distributedalgorithms.util.{getLastLogIndex, getLastLogTerm}
 

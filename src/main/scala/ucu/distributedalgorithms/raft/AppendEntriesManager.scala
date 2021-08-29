@@ -21,8 +21,6 @@ class AppendEntriesManager private(
                                     context: ActorContext[Nothing]
                                   ) {
 
-  //  appendEntriesPerNode()
-
   private def appendEntriesManager(): Behavior[Nothing] = {
     val appendEntries = cluster.map { node =>
       val nextIndex = leaderState.nextIndex.getOrElse(node.id, 0)
@@ -39,9 +37,5 @@ class AppendEntriesManager private(
         Behaviors.stopped
     }
   }
-
-  //  private def appendEntriesPerNode(): Unit = {
-  //
-  //  }
 }
 

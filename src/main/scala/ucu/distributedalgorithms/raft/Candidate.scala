@@ -18,7 +18,7 @@ object Candidate {
 
       context.log.info("Init Candidate with term {}", newState.currentTerm)
 
-      new Candidate(context, cluster, timers).candidate(1, newState)
+      new Candidate(context, cluster, timers).candidate(1, newState, None)
     }
   }
 }
@@ -31,13 +31,17 @@ class Candidate private(
 
   startSingleTimer()
 
-  private def candidate(votes: Int, state: RaftState): Behavior[RaftCommand] = {
-    val requestVoteResponseAdapter =
-      context.messageAdapter[RequestVoteResponse](rsp => RaftRequestVoteResponse(rsp.term, rsp.voteGranted))
+  private def candidate(votes: Int, state: RaftState, requestVotes: Option[ActorRef[Nothing]]): Behavior[RaftCommand] = {
+    val requestVotesActor: ActorRef[Nothing] = requestVotes match {
+      case Some(actor) => actor
+      case None =>
+        val requestVoteResponseAdapter =
+          context.messageAdapter[RequestVoteResponse](rsp => RaftRequestVoteResponse(rsp.term, rsp.voteGranted))
 
-    // todo , do not call second time
-    val requestVotesManager = context.spawnAnonymous[Nothing](
-      RequestVotesManager(cluster, state, requestVoteResponseAdapter))
+        context.spawnAnonymous[Nothing](
+          RequestVotesManager(cluster, state, requestVoteResponseAdapter)
+        )
+    }
 
     Behaviors.receiveMessage[RaftCommand] {
       case GetLog(replyTo) =>
@@ -64,9 +68,9 @@ class Candidate private(
           request,
           cluster,
           isCandidateRole = true,
-          newState => candidate(votes, newState),
+          newState => candidate(votes, newState, Some(requestVotesActor)),
           () =>
-            candidateCleanup(requestVotesManager)
+            candidateCleanup(requestVotesActor)
         )
 
       case request: RaftRequestVoteRequest =>
@@ -76,9 +80,9 @@ class Candidate private(
           state,
           request,
           cluster,
-          newState => candidate(votes, newState),
+          newState => candidate(votes, newState, Some(requestVotesActor)),
           () =>
-            candidateCleanup(requestVotesManager)
+            candidateCleanup(requestVotesActor)
         )
 
       case response@RaftRequestVoteResponse(term, voteGranted) => response match {
@@ -86,17 +90,17 @@ class Candidate private(
           val newVotes = votes + 1
 
           if (newVotes >= calculateMajority(state)) {
-            candidateCleanup(requestVotesManager)
+            candidateCleanup(requestVotesActor)
 
             Leader(cluster, state.copy(leaderId = state.id))
           } else {
-            candidateCleanup(requestVotesManager)
+            candidateCleanup(requestVotesActor)
 
-            candidate(newVotes, state)
+            candidate(newVotes, state, Some(requestVotesActor))
           }
 
         case response if term > state.currentTerm =>
-          candidateCleanup(requestVotesManager)
+          candidateCleanup(requestVotesActor)
 
           Follower(cluster, state.copy(currentTerm = term, votedFor = 0))
 
@@ -105,14 +109,17 @@ class Candidate private(
       }
 
       case CandidateTimeout =>
-        candidateCleanup(requestVotesManager)
+        candidateCleanup(requestVotesActor)
 
         val newState = state.copy(currentTerm = state.currentTerm + 1)
 
         context.log.info("Candidate timeout, new candidate with term {}", newState.currentTerm)
 
         startSingleTimer()
-        candidate(1, newState)
+        candidate(1, newState, None)
+
+      case _ => Behaviors.same
+
     }.receiveSignal {
       case (context, postStop: PostStop) =>
         context.log.info("Candidate behaviour terminated on post stop")
@@ -123,7 +130,7 @@ class Candidate private(
 
   private def startSingleTimer(): Unit = {
     // todo 150-300 ms
-    val duration = Random.between(3000, 4000).milliseconds
+    val duration = Random.between(5000, 7000).milliseconds
 
     timers.startSingleTimer(Candidate.CandidateTimerKey, CandidateTimeout, duration)
   }

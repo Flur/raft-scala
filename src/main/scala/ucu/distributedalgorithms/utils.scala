@@ -61,7 +61,13 @@ package object util {
   }
 
   def getLastLogIndex(state: RaftState): Int = {
-    state.log.length - 1
+    var lastLogIndex = 0
+
+    if (state.log.nonEmpty) {
+      lastLogIndex = state.log.length - 1
+    }
+
+    lastLogIndex
   }
 
   def getLastLogTerm(state: RaftState): Int = {
