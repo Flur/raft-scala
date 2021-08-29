@@ -1,12 +1,17 @@
 package ucu.distributedalgorithms
 
-import ucu.distributedalgorithms.raft.Raft.{RaftAppendEntriesRequest, RaftState}
+import akka.actor.typed.Behavior
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
+import ucu.distributedalgorithms.raft.Follower
+import ucu.distributedalgorithms.raft.Raft.{RaftAppendEntriesRequest, RaftAppendEntriesResponse, RaftCommand, RaftRequestVoteRequest, RaftRequestVoteResponse, RaftState}
 
 import scala.util.Try
 
-case class Node(host: String, port: Int)
+case class Node(id: Int, host: String, port: Int)
 
 package object util {
+  // todo default id
+  val DEFAULT_ID = 0
   val DEFAULT_PORT = 8080
   val DEFAULT_HOST = "127.0.0.1"
 
@@ -23,20 +28,21 @@ package object util {
 
     val host: String = array.lift(0).getOrElse(DEFAULT_HOST)
     val port: Int = array.lift(1).flatMap(stringToInt).getOrElse(DEFAULT_PORT)
+    val id: Int = array.lift(2).flatMap(stringToInt).getOrElse(DEFAULT_PORT)
 
-    Node(host, port)
+    Node(id, host, port)
   }
 
-  def readPortAndHost(portSysEnvName: String, hostSysEnvName: String): Node = {
+  def readPortAndHost(portSysEnvName: String, hostSysEnvName: String): (String, Int) = {
     val port: Option[Int] = readSysEnv(portSysEnvName)
       .flatMap(stringToInt)
     val host = readSysEnv(hostSysEnvName)
 
     (host, port) match {
-      case (Some(host), Some(port)) => Node(host, port)
-      case (Some(host), None) => Node(host, DEFAULT_PORT)
-      case (None, Some(port)) => Node(DEFAULT_HOST, port)
-      case _ => Node(DEFAULT_HOST, DEFAULT_PORT)
+      case (Some(host), Some(port)) => (host, port)
+      case (Some(host), None) => (host, DEFAULT_PORT)
+      case (None, Some(port)) => (DEFAULT_HOST, port)
+      case _ => (DEFAULT_HOST, DEFAULT_PORT)
     }
   }
 
@@ -92,35 +98,186 @@ package object util {
 
     val currentPrevLogTerm = state.log.lift(currentPrevLogIndex).getOrElse(0)
 
-    val leaderLogIsEmpty = appendEntriesRequest.prevLogIndex == 0 && appendEntriesRequest.prevLogTerm == 0
+    val leaderLogIsEmpty = appendEntriesRequest.logLength == 0 && appendEntriesRequest.prevLogTerm == 0
 
-    currentPrevLogIndex >= appendEntriesRequest.prevLogIndex && (leaderLogIsEmpty || currentPrevLogTerm == appendEntriesRequest.prevLogTerm)
+    currentPrevLogIndex >= appendEntriesRequest.logLength && (leaderLogIsEmpty || currentPrevLogTerm == appendEntriesRequest.prevLogTerm)
   }
 
-  def appendEntries(state: RaftState, entries: Seq[LogEntry], prevLogIndex: Int, leaderCommit: Int): RaftState = {
+  //  ∧ &&
+  //  ∨ ||
+//  function AppendEntries(logLength, leaderCommit, entries)
+//    if entries.length > 0 ∧ log.length > logLength then
+//      if log[logLength].term 6= entries[0].term then
+//        log := hlog[0], log[1], . . . , log[logLength − 1]i
+//      end if
+//    end if
+
+//    if logLength + entries.length > log.length then
+//      for i := log.length − logLength to entries.length − 1 do
+//        append entries[i] to log
+//      end for
+//    end if
+
+//    if leaderCommit > commitLength then
+//      for i := commitLength to leaderCommit − 1 do
+//       deliver log[i].msg to the application
+//      end for
+//    commitLength := leaderCommit
+//    end if
+
+//    end function
+  def appendEntries(state: RaftState, logLength: Int, leaderCommit: Int, entries: Seq[LogEntry]): RaftState = {
     var newState = state.copy()
 
-    if (entries.nonEmpty && (newState.log.length > (prevLogIndex + 1))) {
-      // could be check for same term , newState.log.lift(prevLogIndex + 1) != entries.lift(0)
-      var log = newState.log.toList
-
-      newState = newState.copy(
-        log = log.slice(0, prevLogIndex)
-      )
+    // if log of this node is longer that leader log, cut tail of the log
+    if (entries.nonEmpty && newState.log.length > logLength) {
+      if (newState.log(logLength).term != entries.head.term) {
+        newState = newState.copy(
+          log = newState.log.slice(0, logLength - 1)
+        )
+      }
     }
 
-    if ((prevLogIndex + 1 + entries.length) > newState.log.length) {
+    // if leader log is longer that local, append entries
+    if ((logLength + entries.length) > newState.log.length) {
       newState = newState.copy(
         log = newState.log.concat(entries)
       )
     }
 
-    if (leaderCommit > newState.commitIndex) {
+    if (leaderCommit > state.commitIndex) {
       newState = newState.copy(
         commitIndex = leaderCommit
       )
     }
 
     newState
+  }
+
+  //  ∧ &&
+  //  ∨ ||
+
+  //  on receiving (LogRequest, leaderId, term, logLength, logTerm,
+  //    leaderCommit, entries) at node nodeId do
+  //    if term > currentTerm then
+  //      currentTerm := term; votedFor := null
+  //      currentRole := follower; currentLeader := leaderId
+  //    end if
+  //    if term = currentTerm ∧ currentRole = candidate then
+  //      currentRole := follower; currentLeader := leaderId
+  //    end if
+  //    logOk := (log.length ≥ logLength) ∧
+  //      (logLength = 0 ∨ logTerm = log[logLength − 1].term)
+  //  if term = currentTerm ∧ logOk then
+  //    AppendEntries(logLength, leaderCommit, entries)
+  //  ack := logLength + entries.length
+  //  send (LogResponse, nodeId, currentTerm, ack,true) to leaderId
+  //  else
+  //  send (LogResponse, nodeId, currentTerm, 0, false) to leaderId
+  //  end if
+  //    end on
+  def onAppendEntry(
+                     state: RaftState,
+                     request: RaftAppendEntriesRequest,
+                     cluster: List[Node],
+                     isCandidateRole: Boolean,
+                     getSameBehaviour: RaftState => Behavior[RaftCommand],
+                     onChangeCandidateState: () => Unit
+                   ): Behavior[RaftCommand] = {
+    val RaftAppendEntriesRequest(term, leaderId, logLength, prevLogTerm, entries, leaderCommit, replyTo) = request
+    var newState = state.copy()
+    var isFollower = false;
+
+    if (term > newState.currentTerm) {
+      newState = newState.copy(
+        currentTerm = term,
+        votedFor = 0,
+        leaderId = leaderId
+      )
+      isFollower = true
+    }
+
+    if (term == newState.currentTerm && isCandidateRole) {
+      newState = newState.copy(
+        leaderId = leaderId,
+      )
+      isFollower = true
+    }
+
+    val logOk = (newState.log.length >= logLength) && (
+      logLength == 0 || prevLogTerm == newState.log(logLength - 1).term
+      )
+
+    if (term == newState.currentTerm && logOk) {
+      newState = appendEntries(newState, logLength, leaderCommit, entries)
+
+      replyTo ! RaftAppendEntriesResponse(newState.currentTerm, success = true, None)
+    } else {
+      replyTo ! RaftAppendEntriesResponse(newState.currentTerm, success = false, None)
+    }
+
+    if (isFollower) {
+      onChangeCandidateState()
+
+      Follower(cluster, newState)
+    } else {
+      getSameBehaviour(newState)
+    }
+  }
+
+  //  ∧ &&
+  //  ∨ ||
+  //on receiving (VoteRequest, cId, cTerm, cLogLength, cLogTerm)
+  //  at node nodeId do
+  //    myLogTerm := log[log.length − 1].term
+  //  logOk := (cLogTerm > myLogTerm) ∨
+  //    (cLogTerm = myLogTerm ∧ cLogLength ≥ log.length)
+  //  termOk := (cTerm > currentTerm) ∨
+  //    (cTerm = currentTerm ∧ votedFor ∈ {cId, null})
+  //  if logOk ∧ termOk then
+  //    currentTerm := cTerm
+  //    currentRole := follower
+  //    votedFor := cId
+  //    send (VoteResponse, nodeId, currentTerm,true) to node cId
+  //  else
+  //    send (VoteResponse, nodeId, currentTerm, false) to node cId
+  //   end if
+  //  end on
+  def onRequestVote(
+                     state: RaftState,
+                     request: RaftRequestVoteRequest,
+                     cluster: List[Node],
+                     getSameBehaviour: RaftState => Behavior[RaftCommand],
+                     onChangeCandidateState: () => Unit
+                   ): Behavior[RaftCommand] = {
+    val RaftRequestVoteRequest(term, candidateId, lastLogIndex, lastLogTerm, replyTo) = request
+    var newState = state.copy()
+
+    var myLogTerm = 0
+
+    if (newState.log.nonEmpty) {
+      myLogTerm = newState.log.last.term
+    }
+
+    val logOk = (lastLogTerm > myLogTerm) || (lastLogTerm == myLogTerm && lastLogIndex >= (newState.log.length - 1))
+    val termOk = (term > newState.currentTerm) || (term == newState.currentTerm && (newState.votedFor == candidateId || newState.votedFor == 0))
+
+    if (logOk && termOk) {
+      newState = newState.copy(
+        currentTerm = term,
+        votedFor = candidateId,
+        leaderId = candidateId
+      )
+
+      replyTo ! RaftRequestVoteResponse(newState.currentTerm, voteGranted = true)
+
+      onChangeCandidateState()
+
+      Follower(cluster, newState)
+    } else {
+      replyTo ! RaftRequestVoteResponse(newState.currentTerm, voteGranted = false)
+
+      getSameBehaviour(newState)
+    }
   }
 }

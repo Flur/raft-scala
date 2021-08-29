@@ -3,7 +3,7 @@ package ucu.distributedalgorithms.raft
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
 import akka.actor.typed.{ActorRef, Behavior, PostStop}
 import ucu.distributedalgorithms.raft.Raft._
-import ucu.distributedalgorithms.util.{appendEntries, calculateMajority, isLogOkOnAppendEntry, leaderIDToLocation}
+import ucu.distributedalgorithms.util.{appendEntries, calculateMajority, isLogOkOnAppendEntry, leaderIDToLocation, onAppendEntry, onRequestVote}
 import ucu.distributedalgorithms.{Node, RequestVoteResponse}
 
 import scala.concurrent.duration.DurationInt
@@ -14,7 +14,7 @@ object Candidate {
 
   def apply(cluster: List[Node], state: RaftState): Behavior[RaftCommand] = Behaviors.withTimers { timers =>
     Behaviors.setup { context =>
-      val newState = state.copy(currentTerm = state.currentTerm + 1, votedFor = state.id)
+      val newState = state.copy(currentTerm = state.currentTerm + 1, votedFor = state.id, leaderId = 0)
 
       context.log.info("Init Candidate with term {}", newState.currentTerm)
 
@@ -35,6 +35,7 @@ class Candidate private(
     val requestVoteResponseAdapter =
       context.messageAdapter[RequestVoteResponse](rsp => RaftRequestVoteResponse(rsp.term, rsp.voteGranted))
 
+    // todo , do not call second time
     val requestVotesManager = context.spawnAnonymous[Nothing](
       RequestVotesManager(cluster, state, requestVoteResponseAdapter))
 
@@ -55,55 +56,30 @@ class Candidate private(
 
         Behaviors.same
 
-      case request@RaftAppendEntriesRequest(term, leaderId, prevLogIndex, prevLogTerm, entries, leaderCommit, replyTo) =>
-        var newState = state.copy()
+      case request: RaftAppendEntriesRequest =>
+        context.log.info("Candidate received Append Entries")
 
-        if (term > newState.currentTerm) {
-          newState = newState.copy(
-            currentTerm = term,
-            leaderId = leaderId,
-            votedFor = 0,
-          )
-        }
+        onAppendEntry(
+          state,
+          request,
+          cluster,
+          isCandidateRole = true,
+          newState => candidate(votes, newState),
+          () =>
+            candidateCleanup(requestVotesManager)
+        )
 
-        if (term == newState.currentTerm) {
-          newState.copy(
-            leaderId = leaderId
-          )
-        }
-
-        val logOk = isLogOkOnAppendEntry(newState, request)
-
-        if (term == newState.currentTerm && logOk) {
-          replyTo ! RaftAppendEntriesResponse(newState.currentTerm, success = true, 0)
-
-          Follower(cluster, appendEntries(newState, entries, prevLogIndex, leaderCommit))
-        } else {
-          replyTo ! RaftAppendEntriesResponse(newState.currentTerm, success = false, 0)
-
-          Follower(cluster, newState)
-        }
-
-
-      case request@RaftRequestVoteRequest(term, candidateId, _, _, replyTo) =>
+      case request: RaftRequestVoteRequest =>
         context.log.info("Candidate received Request Vote")
 
-        request match {
-          case request if term > state.currentTerm =>
+        onRequestVote(
+          state,
+          request,
+          cluster,
+          newState => candidate(votes, newState),
+          () =>
             candidateCleanup(requestVotesManager)
-
-            replyTo ! RaftRequestVoteResponse(term, voteGranted = true)
-
-            Follower(
-              cluster,
-              state.copy(currentTerm = term, votedFor = candidateId)
-            )
-
-          case _ =>
-            replyTo ! RaftRequestVoteResponse(state.currentTerm, voteGranted = false)
-
-            Behaviors.same
-        }
+        )
 
       case response@RaftRequestVoteResponse(term, voteGranted) => response match {
         case response if state.currentTerm == term && voteGranted =>

@@ -37,15 +37,15 @@ class RaftServiceImpl(raft: ActorRef[RaftCommand])(implicit system: ActorSystem[
   }
 
   override def appendEntries(in: AppendEntriesRequest): Future[AppendEntriesResponse] = {
-    system.log.info("Raft gRPC Service Received AppendEntries term:{} leaderId:{} prevLogIndex:{} prevLogTerm:{} entries:{} leaderCommit:{}",
-      in.term, in.leaderId, in.prevLogIndex, in.prevLogTerm, in.entries, in.leaderCommit
+    system.log.info("Raft gRPC Service Received AppendEntries term:{} leaderId:{} logLength:{} prevLogTerm:{} entries:{} leaderCommit:{}",
+      in.term, in.leaderId, in.logLength, in.prevLogTerm, in.entries, in.leaderCommit
     )
 
     val operationPerformed: Future[RaftCommand] =
-      raft.ask(RaftAppendEntriesRequest(in.term, in.leaderId, in.prevLogIndex, in.prevLogTerm, in.entries, in.leaderCommit, _))
+      raft.ask(RaftAppendEntriesRequest(in.term, in.leaderId, in.logLength, in.prevLogTerm, in.entries, in.leaderCommit, _))
 
     operationPerformed.collect {
-      case RaftAppendEntriesResponse(t, s, 0) =>
+      case RaftAppendEntriesResponse(t, s, _) =>
         system.log.info("Raft gRPC Service Responded with AppendEntriesResponse term:{} success:{}", t, s)
 
         AppendEntriesResponse(t, s)

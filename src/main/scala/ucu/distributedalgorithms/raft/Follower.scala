@@ -5,7 +5,7 @@ import akka.actor.typed.{Behavior, PostStop}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
 import ucu.distributedalgorithms.{LogEntry, Node}
 import ucu.distributedalgorithms.raft.Raft._
-import ucu.distributedalgorithms.util.{appendEntries, isLogOkOnAppendEntry, leaderIDToLocation}
+import ucu.distributedalgorithms.util.{appendEntries, isLogOkOnAppendEntry, leaderIDToLocation, onAppendEntry, onRequestVote}
 
 import scala.concurrent.duration.DurationInt
 import scala.util.Random
@@ -16,6 +16,7 @@ object Follower {
   def apply(cluster: List[Node], state: RaftState): Behavior[RaftCommand] = Behaviors.withTimers { timers =>
     Behaviors.setup { context =>
       context.log.info("Init Follower with term {}", state.currentTerm)
+      context.log.info("Init Follower with term {}", state.leaderId)
 
       new Follower(context, timers, cluster).follower(state)
     }
@@ -50,49 +51,32 @@ class Follower private(
 
         Behaviors.same
 
-      case request@RaftAppendEntriesRequest(term, leaderId, prevLogIndex, prevLogTerm, entries, leaderCommit, replyTo) =>
-        var newState = state.copy()
+      case request: RaftAppendEntriesRequest =>
+        context.log.info("Follower received Append Entries currentTerm {} logLength {} ",
+          state.currentTerm, state.log.length
+        )
 
-        if (term > state.currentTerm) {
-          newState = newState.copy(
-            currentTerm = term,
-            votedFor = 0,
-            leaderId = leaderId
-          )
-        }
+        onAppendEntry(
+          state,
+          request,
+          cluster,
+          isCandidateRole = false,
+          follower,
+          () =>
+            timers.cancel(FollowerTimeout)
+        )
 
-        val logOk = isLogOkOnAppendEntry(newState, request)
-
-        if (term == newState.currentTerm && logOk) {
-          replyTo ! RaftAppendEntriesResponse(newState.currentTerm, success = true, 0)
-
-          follower(appendEntries(newState, entries, prevLogIndex, leaderCommit))
-        } else {
-          replyTo ! RaftAppendEntriesResponse(newState.currentTerm, success = false, 0)
-
-          follower(newState)
-        }
-
-      case request@RaftRequestVoteRequest(term, candidateId, _, _, replyTo) =>
+      case request: RaftRequestVoteRequest =>
         context.log.info("Follower received Request Vote")
 
-        request match {
-          case request if term < state.currentTerm =>
-            replyTo ! RaftRequestVoteResponse(state.currentTerm, voteGranted = false)
-
-            follower(state)
-
-          case request if term > state.currentTerm ||
-            (term == state.currentTerm && (state.votedFor == 0 || state.votedFor == candidateId)) =>
-            replyTo ! RaftRequestVoteResponse(term, voteGranted = true)
-
-            follower(state.copy(votedFor = candidateId, currentTerm = term))
-
-          case _ =>
-            replyTo ! RaftRequestVoteResponse(state.currentTerm, voteGranted = false)
-
-            follower(state)
-        }
+        onRequestVote(
+          state,
+          request,
+          cluster,
+          follower,
+          () =>
+            timers.cancel(FollowerTimeout)
+        )
 
       case FollowerTimeout =>
         timers.cancel(FollowerTimeout)
@@ -100,6 +84,7 @@ class Follower private(
         context.log.info("Election timeout, switch to candidate")
 
         Candidate(cluster, state)
+
     }.receiveSignal {
       case (context, postStop: PostStop) =>
         context.log.info("Follower behaviour terminated on post stop")

@@ -1,11 +1,8 @@
 package ucu.distributedalgorithms.raft
 
-import akka.actor.typed.scaladsl.{Behaviors, TimerScheduler}
-import akka.actor.typed.{ActorRef, Behavior, PostStop}
-import ucu.distributedalgorithms.raft.Raft.{RaftCommand, RaftState}
+import akka.actor.typed.{ActorRef, Behavior}
+import ucu.distributedalgorithms.raft.Raft.RaftState
 import ucu.distributedalgorithms.{LogEntry, Node}
-
-import scala.concurrent.duration.DurationInt
 
 object Raft {
 
@@ -21,7 +18,7 @@ object Raft {
 
   final case class RaftState(
                               id: Int = 0,
-                              leaderId: Int = 0,
+                              leaderId: Int,
                               // persistent state
                               currentTerm: Int = 1,
                               votedFor: Int = 0,
@@ -31,26 +28,24 @@ object Raft {
                               lastApplied: Int = 0
                             )
 
-  final case class VolatileLeaderState(
-                                        nextIndex: List[Int],
-                                        matchIndex: List[Int],
-                                        leaderNextIndex: Int,
-                                        leaderMatchIndex: Int,
-                                      )
+  final case class LeaderState(
+                                nextIndex: Map[Int, Int],
+                                matchIndex: Map[Int, Int],
+                              )
 
   sealed trait RaftCommand
 
   final case class RaftAppendEntriesRequest(
                                              term: Int,
                                              leaderId: Int,
-                                             prevLogIndex: Int,
+                                             logLength: Int,
                                              prevLogTerm: Int,
                                              entries: Seq[LogEntry],
                                              leaderCommit: Int,
                                              replyTo: ActorRef[RaftCommand]
                                            ) extends RaftCommand
 
-  final case class RaftAppendEntriesResponse(term: Int, success: Boolean, followerIndexInCluster: Int = 0) extends RaftCommand
+  final case class RaftAppendEntriesResponse(term: Int, success: Boolean, nodeId: Option[Int]) extends RaftCommand
 
   final case class RaftRequestVoteRequest(
                                            term: Int,
@@ -72,40 +67,21 @@ object Raft {
 
   final case object RaftTimeoutKey
 
-  def apply(cluster: List[Node], id: Int): Behavior[RaftCommand] = Behaviors.withTimers { timers =>
+  def apply(cluster: List[Node], id: Int): Behavior[RaftCommand] =
     new Raft(
       cluster,
-      RaftState(id = id),
-      timers
+      RaftState(id = id, leaderId = 0),
     ).raft()
-
-  }
 }
 
 class Raft private(
                     cluster: List[Node],
                     state: RaftState,
-                    timers: TimerScheduler[RaftCommand],
                   ) {
 
   import Raft._
 
-  //  timers.startSingleTimer(RaftTimeoutKey, InitTimeout, 5.seconds)
-
   private def raft(): Behavior[RaftCommand] = {
     Follower(cluster, state)
   }
-  //    Behaviors.receiveMessage[RaftCommand] {
-  //    case InitTimeout =>
-  //      timers.cancel(RaftTimeoutKey)
-  //
-  //      Follower(cluster, state)
-  //    case _ =>
-  //      Behaviors.same
-  //  }.receiveSignal {
-  //    case (context, postStop: PostStop) =>
-  //      context.log.info("Raft behaviour terminated on post stop")
-  //
-  //      Behaviors.same
-  //  }
 }

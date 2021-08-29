@@ -4,7 +4,7 @@
       <env name="PORT" value="8081" />
       <env name="HOST" value="0.0.0.0" />
       <env name="ID" value="1" />
-      <env name="CLUSTER_LIST" value="0.0.0.0:8082,0.0.0.0:8083" />
+      <env name="CLUSTER_LIST" value="0.0.0.0:8082:2,0.0.0.0:8083:3" />
     </envs>
     <option name="MAIN_CLASS_NAME" value="ucu.distributedalgorithms.Main" />
     <module name="raft-scala" />

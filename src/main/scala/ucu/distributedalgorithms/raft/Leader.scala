@@ -5,7 +5,7 @@ import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
 import akka.actor.typed.{ActorRef, Behavior, PostStop}
 import ucu.distributedalgorithms.raft.AppendEntries.AppendEntriesSuccess
 import ucu.distributedalgorithms.raft.Raft._
-import ucu.distributedalgorithms.util.{appendEntries, calculateMajority, isLogOkOnAppendEntry}
+import ucu.distributedalgorithms.util.{calculateMajority, onAppendEntry, onRequestVote}
 import ucu.distributedalgorithms.{LogEntry, Node}
 
 import scala.concurrent.duration.DurationInt
@@ -18,11 +18,9 @@ object Leader {
     Behaviors.setup { context =>
       context.log.info("Init Leader with term {}", state.currentTerm)
 
-      val leaderState = VolatileLeaderState(
-        cluster.map(_ => state.log.length),
-        cluster.map(_ => 0),
-        state.log.length,
-        0
+      val leaderState = LeaderState(
+        nextIndex = cluster.map(n => n.id -> state.log.length).toMap + (state.id -> state.log.length),
+        matchIndex = cluster.map(n => n.id -> 0).toMap + (state.id -> 0),
       )
 
       new Leader(cluster, context, timers).leader(state, leaderState)
@@ -33,14 +31,14 @@ object Leader {
 class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], timers: TimerScheduler[RaftCommand]) {
 
   val appendEntriesResponseAdapter: ActorRef[AppendEntriesSuccess] = context.messageAdapter[AppendEntriesSuccess](r =>
-    RaftAppendEntriesResponse(r.response.term, r.response.success, r.followerIndexInCluster)
+    RaftAppendEntriesResponse(r.response.term, r.response.success, Some(r.nodeId))
   )
 
   private def leader(
                       state: RaftState,
-                      leaderState: VolatileLeaderState,
+                      leaderState: LeaderState,
                       appendEntriesManager: Option[ActorRef[Nothing]] = None,
-                      replyToOnAppendEntries: Option[ActorRef[ServerResponse]] = None,
+                      replyToOnAppendEntry: Option[(ActorRef[ServerResponse], Int)] = None,
                     ): Behavior[RaftCommand] = {
 
     val appendEntriesManagerActor: ActorRef[Nothing] = appendEntriesManager match {
@@ -54,6 +52,11 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
         )
     }
 
+    replyToOnAppendEntry match {
+      case Some(replyTo) if replyTo._2 >= state.commitIndex  =>
+        replyTo._1 ! OK(None)
+    }
+
     Behaviors.receiveMessage[RaftCommand] {
       case GetLog(replyTo) =>
         replyTo ! OK(Some(state.log))
@@ -63,89 +66,86 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
       case AppendEntry(message, replyTo) =>
         context.log.info("Leader received append entry")
 
+        timers.cancel(LeaderTimeout)
         context.stop(appendEntriesManagerActor)
 
-        replyTo ! OK(None)
-
-        val newLog = LogEntry(state.currentTerm, message) :: state.log
-
-        leader(
-          state.copy(
-            log = newLog
-          ),
-          leaderState.copy(
-            leaderNextIndex = newLog.length
-          ),
-          None,
-          Some(replyTo),
+        val newState = state.copy(
+          log = LogEntry(state.currentTerm, message) :: state.log
+        )
+        val newLeaderState = leaderState.copy(
+          matchIndex = leaderState.matchIndex + (state.id -> newState.log.length)
         )
 
-      case request@RaftAppendEntriesRequest(term, leaderId, prevLogIndex, prevLogTerm, entries, leaderCommit, replyTo) =>
-        var newState = state.copy()
+        leader(
+          newState,
+          newLeaderState,
+          None,
+          Some((replyTo, newState.log.length))
+        )
 
-        if (term > newState.currentTerm) {
-          newState = newState.copy(
-            currentTerm = term,
-            leaderId = leaderId,
-            votedFor = 0,
-          )
-        }
+      case request: RaftAppendEntriesRequest =>
+        context.log.info("Leader received Append Entries")
 
-        val logOk = isLogOkOnAppendEntry(newState, request)
+        onAppendEntry(
+          state,
+          request,
+          cluster,
+          isCandidateRole = false,
+          newState => leader(newState, leaderState, appendEntriesManager),
+          () => {
+            context.stop(appendEntriesManagerActor)
+            timers.cancel(LeaderTimeout)
+          }
+        )
 
-        if (term == newState.currentTerm && logOk) {
-
-          replyTo ! RaftAppendEntriesResponse(newState.currentTerm, success = true, 0)
-
-          Follower(cluster, appendEntries(newState, entries, prevLogIndex, leaderCommit))
-        } else {
-          replyTo ! RaftAppendEntriesResponse(newState.currentTerm, success = false, 0)
-
-          Follower(cluster, newState)
-        }
-
-      case request@RaftRequestVoteRequest(term, candidateId, _, _, replyTo) =>
+      case request: RaftRequestVoteRequest =>
         context.log.info("Leader received Request Vote")
 
-        request match {
-          case request if term > state.currentTerm =>
-            replyTo ! RaftAppendEntriesResponse(term, success = true, 0)
+        context.stop(appendEntriesManagerActor)
+        timers.cancel(LeaderTimeout)
 
-            Follower(
-              cluster,
-              state.copy(
-                currentTerm = term,
-                votedFor = candidateId,
-              )
-            )
-        }
+        onRequestVote(
+          state,
+          request,
+          cluster,
+          s => leader(s, leaderState, appendEntriesManager),
+          () => {
+            context.stop(appendEntriesManagerActor)
+            timers.cancel(LeaderTimeout)
+          }
+        )
 
-      case RaftAppendEntriesResponse(term, success, followerIndexInCluster) =>
+      case RaftAppendEntriesResponse(term, success, nodeIdOpt) =>
         context.log.info("Received append entries response")
 
+        val nodeId: Int = nodeIdOpt.getOrElse(0)
         var newState = state.copy()
         var newLeaderState = leaderState.copy()
 
         if (term == newState.currentTerm) {
           if (success) {
-            val newLogLength = newState.log.length
-
             newLeaderState = newLeaderState.copy(
-              nextIndex = newLeaderState.nextIndex.patch(followerIndexInCluster, Seq(newLogLength), 1),
-              matchIndex = newLeaderState.matchIndex.patch(followerIndexInCluster, Seq(newLogLength), 1)
+              nextIndex = newLeaderState.nextIndex + (nodeId -> newState.log.length),
+              matchIndex = newLeaderState.matchIndex + (nodeId -> newState.log.length)
             )
 
-            newState = commitLogEntries(newState)
-          } else if (newLeaderState.nextIndex.lift(followerIndexInCluster).getOrElse(0) > 0) {
-            val nextIndex = newLeaderState.nextIndex.lift(followerIndexInCluster).getOrElse(0)
+            newState = commitLogEntries(newState, leaderState, cluster)
+          } else if (newLeaderState.nextIndex.getOrElse(nodeId, 0) > 0) {
+            val nextIndex = newLeaderState.nextIndex.getOrElse(nodeId, 0)
 
             newLeaderState = newLeaderState.copy(
-              nextIndex = newLeaderState.nextIndex.patch(followerIndexInCluster, Seq(nextIndex - 1), 1)
+              nextIndex = newLeaderState.nextIndex + (nodeId -> (nextIndex - 1))
             )
           }
 
-          leader(state, leaderState, appendEntriesManager)
+          timers.cancel(LeaderTimeout)
+          context.stop(appendEntriesManagerActor)
+
+          leader(state, newLeaderState)
         } else if (term > newState.currentTerm) {
+          context.stop(appendEntriesManagerActor)
+          timers.cancel(LeaderTimeout)
+
           Follower(
             cluster,
             newState.copy(
@@ -171,14 +171,27 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
     }
   }
 
-  private def acks(state: RaftState, length: Int): Unit = {
-    // todo
+  private def acks(leaderState: LeaderState)(cluster: List[Node])(length: Int): Int = {
+    cluster
+      .map(n => leaderState.matchIndex.getOrElse(n.id, 0))
+      .count(_ >= length)
   }
 
-  private def commitLogEntries(state: RaftState): RaftState = {
-    var majority = calculateMajority(state)
+  private def commitLogEntries(state: RaftState, leaderState: LeaderState, cluster: List[Node]): RaftState = {
+    val majority = calculateMajority(state)
+    val a: Int => Int  = acks(leaderState)(cluster)
+    var newState = state.copy()
 
-    // todo
-    state
+    val ready = List.range(1, state.log.length)
+      .map(len => a(len))
+      .filter(a => a >= majority)
+
+    if (ready.nonEmpty && ready.max > newState.commitIndex && newState.log(ready.max - 1).term == newState.currentTerm) {
+      newState = newState.copy(
+        commitIndex = ready.max
+      )
+    }
+
+    newState
   }
 }

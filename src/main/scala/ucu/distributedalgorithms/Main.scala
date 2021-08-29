@@ -13,6 +13,6 @@ object Main {
     println(s"List of nodes is $clusterNodes")
     println(s"Node is is $id")
 
-    val system: ActorSystem[RaftServer.Message] = ActorSystem(RaftServer(currentNode.host, currentNode.port, clusterNodes, id), "raft-server")
+    val system: ActorSystem[RaftServer.Message] = ActorSystem(RaftServer(currentNode._1, currentNode._2, clusterNodes, id), "raft-server")
   }
 }
