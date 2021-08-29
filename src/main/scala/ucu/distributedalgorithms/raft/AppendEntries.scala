@@ -92,12 +92,12 @@ class AppendEntries private(
     }
 
     context.log.info(
-      "Sent append entries to node {}-{} term {} nextIndex {} prevLogTerm {} logEntries {}",
-      node.host, node.port, state.currentTerm, nextIndex, prevLogTerm, logEntries
+      "Sent append entries to node {}-{} term {} nextIndex {} prevLogTerm {} logEntries {} commitIndex {}",
+      node.host, node.port, state.currentTerm, nextIndex, prevLogTerm, logEntries, state.commitIndex
     )
 
     val reply: Future[AppendEntriesResponse] = client.appendEntries(
-      AppendEntriesRequest(state.currentTerm, state.id, nextIndex, prevLogTerm, logEntries)
+      AppendEntriesRequest(state.currentTerm, state.id, nextIndex, prevLogTerm, logEntries, state.commitIndex)
     )
 
     context.pipeToSelf(reply) {
