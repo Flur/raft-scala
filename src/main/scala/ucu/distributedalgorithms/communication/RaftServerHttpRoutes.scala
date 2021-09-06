@@ -24,7 +24,7 @@ class RaftServerHttpRoutes(raft: ActorRef[Raft.RaftCommand])(implicit system: Ac
 
   // asking someone requires a timeout and a scheduler, if the timeout hits without response
   // the ask is failed with a TimeoutException
-  implicit val timeout: Timeout = 3.seconds
+  implicit val timeout: Timeout = 10.seconds
 
   lazy val raftServerHttpRoutes: Route =
     path("message") {
