@@ -29,7 +29,7 @@ class Follower private(
                       ) {
   private def follower(state: RaftState): Behavior[RaftCommand] = {
     // todo timeout 100 - 500 m
-    val duration = Random.between(8000, 10000).milliseconds
+    val duration = Random.between(2000, 10000).milliseconds
 
     timers.startSingleTimer(Follower.FollowerTimerKey, FollowerTimeout, duration)
 
@@ -62,7 +62,8 @@ class Follower private(
           isCandidateRole = false,
           follower,
           () =>
-            timers.cancel(FollowerTimeout)
+            timers.cancel(FollowerTimeout),
+          context
         )
 
       case request: RaftRequestVoteRequest =>

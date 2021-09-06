@@ -70,11 +70,12 @@ class Candidate private(
           isCandidateRole = true,
           newState => candidate(votes, newState, Some(requestVotesActor)),
           () =>
-            candidateCleanup(requestVotesActor)
+            candidateCleanup(requestVotesActor),
+          context
         )
 
       case request: RaftRequestVoteRequest =>
-        context.log.info("Candidate received Request Vote")
+        context.log.info("Candidate received Request Vote with term {}")
 
         onRequestVote(
           state,
@@ -85,28 +86,31 @@ class Candidate private(
             candidateCleanup(requestVotesActor)
         )
 
-      case response@RaftRequestVoteResponse(term, voteGranted) => response match {
-        case response if state.currentTerm == term && voteGranted =>
-          val newVotes = votes + 1
+      case response@RaftRequestVoteResponse(term, voteGranted) =>
+        context.log.info("Candidate received RaftRequestVoteResponse term {} voteGranted {}", term, voteGranted)
 
-          if (newVotes >= calculateMajority(state)) {
+        response match {
+          case response if state.currentTerm == term && voteGranted =>
+            val newVotes = votes + 1
+
+            if (newVotes >= calculateMajority(cluster)) {
+              candidateCleanup(requestVotesActor)
+
+              Leader(cluster, state.copy(leaderId = state.id))
+            } else {
+              candidateCleanup(requestVotesActor)
+
+              candidate(newVotes, state, Some(requestVotesActor))
+            }
+
+          case response if term > state.currentTerm =>
             candidateCleanup(requestVotesActor)
 
-            Leader(cluster, state.copy(leaderId = state.id))
-          } else {
-            candidateCleanup(requestVotesActor)
+            Follower(cluster, state.copy(currentTerm = term, votedFor = 0))
 
-            candidate(newVotes, state, Some(requestVotesActor))
-          }
-
-        case response if term > state.currentTerm =>
-          candidateCleanup(requestVotesActor)
-
-          Follower(cluster, state.copy(currentTerm = term, votedFor = 0))
-
-        case _ =>
-          Behaviors.same
-      }
+          case _ =>
+            Behaviors.same
+        }
 
       case CandidateTimeout =>
         candidateCleanup(requestVotesActor)
@@ -130,7 +134,7 @@ class Candidate private(
 
   private def startSingleTimer(): Unit = {
     // todo 150-300 ms
-    val duration = Random.between(5000, 7000).milliseconds
+    val duration = Random.between(3000, 6000).milliseconds
 
     timers.startSingleTimer(Candidate.CandidateTimerKey, CandidateTimeout, duration)
   }

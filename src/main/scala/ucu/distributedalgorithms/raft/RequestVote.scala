@@ -1,14 +1,15 @@
 package ucu.distributedalgorithms.raft
 
-import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
 import akka.actor.typed.{ActorRef, ActorSystem, Behavior, PostStop}
 import akka.grpc.GrpcClientSettings
 import ucu.distributedalgorithms._
-import ucu.distributedalgorithms.raft.Raft.RaftState
+import ucu.distributedalgorithms.raft.Raft.{FollowerTimeout, RaftCommand, RaftState}
 import ucu.distributedalgorithms.util.{getLastLogIndex, getLastLogTerm}
 
+import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ExecutionContextExecutor, Future}
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Random, Success}
 
 
 object RequestVote {
@@ -16,18 +17,24 @@ object RequestVote {
   sealed trait RequestVoteCommand
 
   final case class RequestVoteSuccess(response: RequestVoteResponse) extends RequestVoteCommand
+  final case object RequestVoteTimerKey extends RequestVoteCommand
 
   final case class RequestVoteFailure() extends RequestVoteCommand
 
+  final case object RequestVoteTimeout extends RequestVoteCommand
+
   def apply(node: Node, candidate: ActorRef[RequestVoteResponse], state: RaftState): Behavior[RequestVoteCommand] =
-    Behaviors.setup { context => new RequestVote(node, state, context, candidate).requestVote() }
+    Behaviors.withTimers[RequestVoteCommand] { timers =>
+      Behaviors.setup { context => new RequestVote(node, state, context, candidate, timers).requestVote() }
+    }
 }
 
 class RequestVote private(
                            node: Node,
                            state: RaftState,
                            context: ActorContext[RequestVote.RequestVoteCommand],
-                           candidate: ActorRef[RequestVoteResponse]
+                           candidate: ActorRef[RequestVoteResponse],
+                           timers: TimerScheduler[RequestVote.RequestVoteCommand],
                          ) {
 
   import RequestVote._
@@ -47,9 +54,17 @@ class RequestVote private(
       Behaviors.stopped
 
     case RequestVoteFailure() =>
+      val duration = Random.between(2000, 3000).milliseconds
+
+      timers.startSingleTimer(RequestVoteTimerKey, RequestVoteTimeout, duration)
+
+      Behaviors.same
+
+    case RequestVoteTimeout =>
       makeVoteRequest()
 
       Behaviors.same
+
   }.receiveSignal {
     case (context: ActorContext[RequestVoteCommand], postStop: PostStop) =>
       // todo could be one client for whole app, it's concurrent

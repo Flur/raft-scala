@@ -23,7 +23,7 @@ object Leader {
         matchIndex = cluster.map(n => n.id -> 0).toMap + (state.id -> 0),
       )
 
-      new Leader(cluster, context, timers).leader(state, leaderState)
+      new Leader(cluster, context, timers).leader(state, leaderState, None, None)
     }
   }
 }
@@ -37,24 +37,33 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
   private def leader(
                       state: RaftState,
                       leaderState: LeaderState,
-                      appendEntriesManager: Option[ActorRef[Nothing]] = None,
-                      replyToOnAppendEntry: Option[(ActorRef[ServerResponse], Int)] = None,
+                      appendEntriesManager: Option[ActorRef[Nothing]],
+                      replyToOnAppendEntry: Option[(ActorRef[ServerResponse], Int)],
                     ): Behavior[RaftCommand] = {
 
     val appendEntriesManagerActor: ActorRef[Nothing] = appendEntriesManager match {
       case Some(actor) => actor
       case None =>
-        val duration = Random.between(7000, 8000).milliseconds
+        val duration = Random.between(1000, 2000).milliseconds
 
         timers.startSingleTimer(Leader.LeaderTimeoutKey, LeaderTimeout, duration)
 
         context.spawnAnonymous[Nothing](AppendEntriesManager(cluster, state, leaderState, appendEntriesResponseAdapter))
     }
 
-    replyToOnAppendEntry match {
-      case Some(replyTo) if replyTo._2 >= state.commitIndex  =>
-        replyTo._1 ! OK(None)
-      case None => None
+    val newReply = replyToOnAppendEntry match {
+      case Some(replyTo)  =>
+        if (acks(leaderState)(getAllNodesCluster(state))(replyTo._2) >= calculateMajority(cluster)) {
+          context.log.info("Message replicated to the majority")
+
+          replyTo._1 ! OK(None)
+
+          None
+        } else {
+          replyToOnAppendEntry
+        }
+      case None =>
+        None
     }
 
     Behaviors.receiveMessage[RaftCommand] {
@@ -70,7 +79,7 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
         context.stop(appendEntriesManagerActor)
 
         val newState = state.copy(
-          log = LogEntry(state.currentTerm, message) :: state.log
+          log = state.log :+ LogEntry(state.currentTerm, message)
         )
         val newLeaderState = leaderState.copy(
           matchIndex = leaderState.matchIndex + (state.id -> newState.log.length)
@@ -91,11 +100,12 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
           request,
           cluster,
           isCandidateRole = false,
-          newState => leader(newState, leaderState, appendEntriesManager),
+          newState => leader(newState, leaderState, appendEntriesManager, newReply),
           () => {
             context.stop(appendEntriesManagerActor)
             timers.cancel(LeaderTimeout)
-          }
+          },
+          context
         )
 
       case request: RaftRequestVoteRequest =>
@@ -108,7 +118,7 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
           state,
           request,
           cluster,
-          s => leader(s, leaderState, appendEntriesManager),
+          s => leader(s, leaderState, appendEntriesManager, newReply),
           () => {
             context.stop(appendEntriesManagerActor)
             timers.cancel(LeaderTimeout)
@@ -116,6 +126,8 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
         )
 
       case RaftAppendEntriesResponse(term, success, nodeIdOpt) =>
+        context.log.info("Leader Received Append Entries response term {} success {}", term, success)
+
         val nodeId: Int = nodeIdOpt.getOrElse(0)
         var newState = state.copy()
         var newLeaderState = leaderState.copy()
@@ -127,7 +139,7 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
               matchIndex = newLeaderState.matchIndex + (nodeId -> newState.log.length)
             )
 
-            newState = commitLogEntries(newState, leaderState, cluster)
+            newState = commitLogEntries(newState, newLeaderState, cluster)
           } else if (newLeaderState.nextIndex.getOrElse(nodeId, 0) > 0) {
             val nextIndex = newLeaderState.nextIndex.getOrElse(nodeId, 0)
 
@@ -136,7 +148,7 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
             )
           }
 
-          leader(state, newLeaderState, Some(appendEntriesManagerActor))
+          leader(newState, newLeaderState, Some(appendEntriesManagerActor), newReply)
         } else if (term > newState.currentTerm) {
           context.stop(appendEntriesManagerActor)
           timers.cancel(LeaderTimeout)
@@ -155,7 +167,7 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
       case LeaderTimeout =>
         context.stop(appendEntriesManagerActor)
 
-        leader(state, leaderState)
+        leader(state, leaderState, None, newReply)
 
       case _ => Behaviors.same
     }.receiveSignal {
@@ -175,13 +187,14 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
   }
 
   private def commitLogEntries(state: RaftState, leaderState: LeaderState, cluster: List[Node]): RaftState = {
-    val majority = calculateMajority(state)
-    val a: Int => Int  = acks(leaderState)(cluster)
+    val majority = calculateMajority(getAllNodesCluster(state))
+    val a: Int => Int  = acks(leaderState)(getAllNodesCluster(state))
     var newState = state.copy()
 
     val ready = List.range(1, state.log.length)
-      .map(len => a(len))
-      .filter(a => a >= majority)
+      .map(len => (len, a(len)))
+      .filter(a => a._2 >= majority)
+      .map(a => a._1)
 
     if (ready.nonEmpty && ready.max > newState.commitIndex && newState.log(ready.max - 1).term == newState.currentTerm) {
       newState = newState.copy(
@@ -190,5 +203,10 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
     }
 
     newState
+  }
+
+  private def getAllNodesCluster(state: RaftState): List[Node] = {
+    // here we don't need host and port
+    cluster :+ Node(state.id, "", 0)
   }
 }

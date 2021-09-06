@@ -57,6 +57,8 @@ class AppendEntries private(
 
       Behaviors.same
 
+    // 5.3 log replication If followers crash or run slowly,
+    // or if network packets are lost, the leader retries AppendEntries RPCs indefinitely
     case AppendEntriesFailure() =>
       timers.startSingleTimer(AppendEntriesRetryKey, MakeAppendEntriesRequest, 1500.milliseconds)
 
@@ -82,7 +84,7 @@ class AppendEntries private(
   }
 
   private def appendEntriesRequest(): Unit = {
-    val logEntries = state.log.slice(nextIndex, state.log.length - 1)
+    val logEntries = state.log.slice(nextIndex, state.log.length)
     var prevLogTerm = 0
 
     if (nextIndex > 0) {

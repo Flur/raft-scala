@@ -1,31 +1,51 @@
-version: "3.9"
+version: "3.7"
 services:
   node1:
     image: raft-scala:1.0<localBuild>
     environment:
-      PORT: 8080
-      HOST: "node1"
-      CLUSTER_LIST: "node2:8080:2,node3:8080:3"
-      ID: "node1:8081"
+      PORT: "8081"
+      HOST: "0.0.0.0"
+      CLUSTER_LIST: "node2:8082:2,node3:8083:3"
+      ID: "1"
     ports:
-      - "8081:8080"
+      - "0.0.0.0:8081:8081"
+    networks:
+      - main
+      - one
 
   node2:
     image: raft-scala:1.0<localBuild>
     environment:
-      PORT: 8080
-      HOST: "node2"
-      CLUSTER_LIST: "node1:8080:1,node3:8080:3"
-      ID: "node2:8082"
+      PORT: "8082"
+      HOST: "0.0.0.0"
+      CLUSTER_LIST: "node1:8081:1,node3:8083:3"
+      ID: "2"
     ports:
-      - "8082:8080"
+      - "0.0.0.0:8082:8082"
+    networks:
+      - main
+      - two
 
   node3:
     image: raft-scala:1.0<localBuild>
     environment:
-      PORT: 8080
-      HOST: "node3"
-      CLUSTER_LIST: "node1:8080:1,node2:8080:2"
-      ID: "node3:8083"
+      PORT: "8083"
+      HOST: "0.0.0.0"
+      CLUSTER_LIST: "node1:8081:1,node2:8082:2"
+      ID: "3"
     ports:
-      - "8083:8080"
+      - "0.0.0.0:8083:8083"
+    networks:
+      - main
+      - three
+
+networks:
+  main:
+    name: "main"
+  one:
+    name: "one"
+  two:
+    name: "two"
+  three:
+    name: "three"
+

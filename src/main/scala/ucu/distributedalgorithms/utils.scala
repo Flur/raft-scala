@@ -77,9 +77,9 @@ package object util {
     }
   }
 
-  def calculateMajority(state: RaftState): Int = {
+  def calculateMajority(cluster: List[Node]): Int = {
     // + 1 add current node
-    ((state.log.length + 1) / 2.0).ceil.toInt
+    ((cluster.length + 1) / 2.0).ceil.toInt
   }
 
   def leaderIDToLocation(leaderId: Int): String = {
@@ -188,7 +188,8 @@ package object util {
                      cluster: List[Node],
                      isCandidateRole: Boolean,
                      getSameBehaviour: RaftState => Behavior[RaftCommand],
-                     onChangeCandidateState: () => Unit
+                     onChangeCandidateState: () => Unit,
+                     context: ActorContext[RaftCommand]
                    ): Behavior[RaftCommand] = {
     val RaftAppendEntriesRequest(term, leaderId, logLength, prevLogTerm, entries, leaderCommit, replyTo) = request
     var newState = state.copy()
@@ -280,6 +281,14 @@ package object util {
       onChangeCandidateState()
 
       Follower(cluster, newState)
+    } else if (term > newState.currentTerm){
+      replyTo ! RaftRequestVoteResponse(newState.currentTerm, voteGranted = false)
+
+      onChangeCandidateState()
+
+      Follower(cluster, newState.copy(
+        currentTerm = term
+      ))
     } else {
       replyTo ! RaftRequestVoteResponse(newState.currentTerm, voteGranted = false)
 
