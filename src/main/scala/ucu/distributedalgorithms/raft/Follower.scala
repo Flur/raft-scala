@@ -51,8 +51,8 @@ class Follower private(
         Behaviors.same
 
       case request: RaftAppendEntriesRequest =>
-        context.log.info("Follower received Append Entries currentTerm {} logLength {} ",
-          state.currentTerm, state.log.length
+        context.log.info("Follower received Append Entries currentTerm {} current logLength {} leaderCommit {}",
+          state.currentTerm, state.log.length, request.leaderCommit
         )
 
         onAppendEntry(

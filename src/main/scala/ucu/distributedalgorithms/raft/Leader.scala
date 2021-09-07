@@ -139,7 +139,7 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
               matchIndex = newLeaderState.matchIndex + (nodeId -> newState.log.length)
             )
 
-            newState = commitLogEntries(newState, newLeaderState, cluster)
+            newState = commitLogEntries(newState, newLeaderState)
           } else if (newLeaderState.nextIndex.getOrElse(nodeId, 0) > 0) {
             val nextIndex = newLeaderState.nextIndex.getOrElse(nodeId, 0)
 
@@ -186,17 +186,20 @@ class Leader private(cluster: List[Node], context: ActorContext[RaftCommand], ti
       .count(_ >= length)
   }
 
-  private def commitLogEntries(state: RaftState, leaderState: LeaderState, cluster: List[Node]): RaftState = {
+  private def commitLogEntries(state: RaftState, leaderState: LeaderState): RaftState = {
     val majority = calculateMajority(getAllNodesCluster(state))
     val a: Int => Int  = acks(leaderState)(getAllNodesCluster(state))
     var newState = state.copy()
 
-    val ready = List.range(1, state.log.length)
+    val ready = List.range(1, state.log.length + 1)
       .map(len => (len, a(len)))
       .filter(a => a._2 >= majority)
       .map(a => a._1)
 
-    if (ready.nonEmpty && ready.max > newState.commitIndex && newState.log(ready.max - 1).term == newState.currentTerm) {
+    if (ready.nonEmpty &&
+      ready.max > newState.commitIndex &&
+      newState.log(ready.max - 1).term == newState.currentTerm) {
+
       newState = newState.copy(
         commitIndex = ready.max
       )

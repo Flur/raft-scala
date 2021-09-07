@@ -139,7 +139,7 @@ package object util {
     if (entries.nonEmpty && newState.log.length > logLength) {
       if (newState.log(logLength).term != entries.head.term) {
         newState = newState.copy(
-          log = newState.log.slice(0, logLength - 1)
+          log = newState.log.slice(0, logLength)
         )
       }
     }
